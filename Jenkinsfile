@@ -1,65 +1,66 @@
+// Declarative pipeline: test, build and deploy the Flask + Nginx + PostgreSQL stack
+// with Docker Compose. The Jenkins agent needs Docker with the Compose plugin.
 pipeline {
     agent any
 
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 15, unit: 'MINUTES')
+    }
+
+    environment {
+        COMPOSE_PROJECT_NAME = 'flask-docker-app'
+    }
+
     stages {
-        stage('Build Docker Image') {
+        stage('Test') {
             steps {
-                sh 'docker build -t flask-multistage-app .'
+                // Builds the "test" stage of the Dockerfile, which runs pytest.
+                sh 'docker build --target test -t flask-app-test .'
             }
         }
 
-        stage('Stop Old Containers') {
+        stage('Build') {
             steps {
-                sh 'docker rm -f flask-app postgres-db nginx || true'
+                sh 'docker compose build'
             }
         }
 
-        stage('Create Network') {
+        stage('Deploy') {
             steps {
-                sh 'docker network create flask-network || true'
+                // Recreates only the containers whose image or config changed.
+                // The postgres-data volume is kept, so database contents survive.
+                sh 'docker compose up -d --remove-orphans'
             }
         }
 
-        stage('Run Postgres') {
+        stage('Smoke Test') {
             steps {
+                // Request /health through Nginx from inside the Nginx container,
+                // so the check works no matter which host port is published.
                 sh '''
-                docker run -d --name postgres-db \
-                  --network flask-network \
-                  -e POSTGRES_USER=admin \
-                  -e POSTGRES_PASSWORD=secret \
-                  -e POSTGRES_DB=flaskdb \
-                  -v postgres-data:/var/lib/postgresql/data \
-                  postgres:15 || true
+                for i in $(seq 1 20); do
+                  if docker compose exec -T nginx wget -qO- http://localhost/health; then
+                    echo
+                    echo "Smoke test passed"
+                    exit 0
+                  fi
+                  echo "Waiting for the stack to become healthy ($i/20)..."
+                  sleep 3
+                done
+                echo "Smoke test failed"
+                exit 1
                 '''
             }
         }
+    }
 
-        stage('Run Flask App') {
-            steps {
-                sh '''
-                docker run -d --name flask-app \
-                  --network flask-network \
-                  -p 5000:5000 \
-                  flask-multistage-app || true
-                '''
-            }
+    post {
+        failure {
+            sh 'docker compose logs --tail=100 || true'
         }
-
-        stage('Run Nginx') {
-            steps {
-                sh '''
-                docker run -d --name nginx \
-                  --network flask-network \
-                  -p 80:80 \
-                  nginx || true
-                '''
-            }
-        }
-
-        stage('Verify Deployment') {
-            steps {
-                sh 'docker ps'
-            }
+        always {
+            sh 'docker compose ps || true'
         }
     }
 }

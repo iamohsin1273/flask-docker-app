@@ -2,9 +2,13 @@ __pycache__
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache
 .env
 venv
+.venv
 .git
 .gitignore
-Dockerfile
-.dockerignore
+README.md
+docker-compose.yml
+Jenkinsfile
+nginx.conf
